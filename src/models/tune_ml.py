@@ -33,17 +33,18 @@ def objective_LR(trial: optuna.Trial, data):
 def objective_SVM(trial: optuna.Trial, data):
     """Objective for support vector machine."""
 
-    kernel = trial.suggest_categorical('kernel', ['linear', 'rbf'])
+    kernel = trial.suggest_categorical('kernel', ['linear', 'poly', 'rbf'])
 
     if kernel == 'linear':
         params = {
             'C': trial.suggest_float('C', 1e-5, 1e5, log=True),
         }
         clf = LinearSVC(**params)
-    elif kernel == 'rbf':
+    else:
         params = {
             'C': trial.suggest_float('C', 1e-5, 1e5, log=True),
-            'gamma': trial.suggest_float('gamma', 1e-3, 1e3, log=True)
+            'gamma': trial.suggest_float('gamma', 1e-3, 1e3, log=True),
+            'kernel': kernel
         }
         clf = SVC(**params)
 
@@ -57,7 +58,10 @@ def objective_RF(trial: optuna.Trial, data):
     """Objective for random forest."""
 
     params = {
-        # TODO: suggest hyperparams
+        'n_estimators': trial.suggest_int('n_estimators', 100, 1000),
+        'max_depth': trial.suggest_int('max_depth', 3, 10),
+        'max_samples': trial.suggest_float('subsample', 0.6, 1),
+        'max_features': trial.suggest_float('colsample_bytree', 0.1, 1),
     }
 
     clf = RandomForestClassifier(**params)
@@ -90,12 +94,12 @@ def objective_XGB(trial: optuna.Trial, data):
 
     return clf.score(X_val, y_val)
 
-def main(args):
+def tune_model(args):
     np.random.seed(args.seed)
 
     data = prep_data(args.data_path)
 
-    objectives = {'RF': objective_RF, 'XGB': objective_XGB}
+    objectives = {'LR': objective_LR, 'SVM': objective_SVM, 'RF': objective_RF, 'XGB': objective_XGB}
     objective = partial(objectives[args.model], data=data)
 
     study = optuna.create_study(study_name=f'tune_{args.model}')
@@ -104,9 +108,9 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Tune classic ML algorithms with Optuna.')
     parser.add_argument('data_path', help='Path to training data.')
-    parser.add_argument('model', choices=['RF', 'XGB'], help='Model type.')
+    parser.add_argument('model', choices=['LR', 'SVM', 'RF', 'XGB'], help='Model type.')
     parser.add_argument('--seed', type=int, default=0, help='Random seed.')
     parser.add_argument('--n_trials', type=int, default=100, help='Number of trials for tuning.')
     args = parser.parse_args()
 
-    main(args)
+    tune_model(args)
