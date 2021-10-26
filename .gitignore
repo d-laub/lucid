@@ -1,2 +1,5 @@
 data
+*.pyc
 *.code-workspace
+.pytest_cache
+.ipynb_checkpoints

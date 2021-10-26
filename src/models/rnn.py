@@ -1,9 +1,6 @@
-from logging import warning
-import warnings
 from typing import List
 import torch
 from torch import nn
-from torch.functional import einsum
 import torch.nn.functional as F
 import pytorch_lightning as tl
 import einops
@@ -35,7 +32,7 @@ class LSTM(nn.Module):
         List of hidden dimensions for final FC layers.
     num_layers : int
         Number of LSTMs to stack.
-    dropout : bool, default False
+    dropout : float, default 0
         Whether to use dropout in the LSTM or not.
     bidirectional : bool, default False
         Whether to use a bidirectional LSTM or not.
@@ -47,10 +44,12 @@ class LSTM(nn.Module):
         hidden_dim: int,
         fc_hidden_dims: List[int]=None,
         num_layers: int=1,
-        dropout: bool=False,
-        bidirectional: bool=False
+        dropout: float=0,
+        bidirectional: bool=False,
+        batch_first: bool=False
     ):
-        enc = nn.Embedding(num_emb, emb_dim) # only supports SGD and SparseAdam
+        super().__init__()
+        emb = nn.Embedding(num_emb, emb_dim) # only supports SGD and SparseAdam
         self.has_embedding = True
 
         lstm = nn.LSTM(
@@ -59,7 +58,7 @@ class LSTM(nn.Module):
             num_layers=num_layers,
             dropout=dropout,
             bidirectional=bidirectional,
-            batch_first=True
+            batch_first=batch_first
         )
 
         # output is concatenation of final hidden and cell states
@@ -77,24 +76,23 @@ class LSTM(nn.Module):
         else:
             fc = nn.Linear(lstm_out_dim, 1)
 
-        self.model = nn.ModuleDict({
-            'enc': enc if self.has_embedding else None,
+        self.layers = nn.ModuleDict({
+            'emb': emb,
             'lstm': lstm,
             'fc': fc
         })
 
-        def init_weights(m):
-            if isinstance(m, nn.Linear):
-                torch.nn.init.kaiming_normal_(m.weight)
-            elif isinstance(m, nn.LSTM):
-                torch.nn.init.orthogonal_(m)
+        # def init_weights(m):
+        #     if isinstance(m, nn.Linear):
+        #         torch.nn.init.kaiming_normal_(m.weight)
+        #     elif isinstance(m, nn.LSTM):
+        #         torch.nn.init.orthogonal_(m)
 
     def forward(self, x):
-        if self.has_embedding:
-            x = self.model['enc'](x)
-        _, (hn, cn) = self.model['lstm'](x)
-        x = einops.rearrange([hn, cn], 'b n d h -> n (b d h)')
-        x = self.model['fc'](x)
+        x = self.layers['emb'](x) # (L N) -> (L N Hin)
+        _, (hn, cn) = self.layers['lstm'](x) # (D*num_l N Hout), (D*num_l N Hout)
+        x = einops.rearrange([hn, cn], 'b d n h -> n (b d h)') # (N 2(D*num_l*Hout))
+        x = self.layers['fc'](x) # (N 1)
         return x
 
 
@@ -112,7 +110,7 @@ class LSTM_No_Embedding(nn.Module):
         Hidden & cell state dimension.
     num_layers : int
         Number of LSTMs to stack.
-    dropout : bool, default False
+    dropout : float, default 0
         Whether to use dropout in the LSTM or not.
     bidirectional : bool, default False
         Whether to use a bidirectional LSTM or not.
@@ -123,9 +121,10 @@ class LSTM_No_Embedding(nn.Module):
         hidden_dim: int,
         fc_hidden_dims: List[int]=None,
         num_layers: int=1,
-        dropout: bool=False,
+        dropout: float=0,
         bidirectional: bool=False
     ):
+        super().__init__()
         lstm = nn.LSTM(
             input_dim,
             hidden_dim,
@@ -179,9 +178,10 @@ class tl_RNN(tl.LightningModule):
     wd : float, default 0
         Weight decay.
     """
-    def __init__(self, model, lr=1e-3, wd=0):
+    def __init__(self, model, lr=1e-3, wd=0, optimizer=torch.optim.Adam):
         self.model = model
         self.save_hyperparameters()
+        self.optimizer = optimizer
 
     def forward(self, x):
         x = self.model(x) # (L N D*Hout)
@@ -195,10 +195,8 @@ class tl_RNN(tl.LightningModule):
         return loss
     
     def configure_optimizers(self):
-        if getattr(self.model, 'has_embedding', False):
-            if self.hparams.wd != 0:
-                warnings.warn('Ignoring weight decay. Using an embedding layer requires SparseAdam which does not support weight decay.')
-            optimizer = torch.optim.SparseAdam(self.parameters(), lr=self.hparams.lr)
+        if self.hparams.wd != 0:
+            optimizer = self.optimizer(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.wd)
         else:
-            optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.wd)
+            optimizer = self.optimizer(self.parameters(), lr=self.hparams.lr)
         return optimizer
