@@ -8,6 +8,7 @@ import einops
 
 class RNN(nn.Module):
     def __init__(self):
+        super().__init__()
         pass
     
     def forward(self, x):
@@ -82,11 +83,16 @@ class LSTM(nn.Module):
             'fc': fc
         })
 
-        # def init_weights(m):
-        #     if isinstance(m, nn.Linear):
-        #         torch.nn.init.kaiming_normal_(m.weight)
-        #     elif isinstance(m, nn.LSTM):
-        #         torch.nn.init.orthogonal_(m)
+        def init_weights(m):
+            if isinstance(m, nn.Linear):
+                torch.nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, nn.LSTM):
+                for name, param in m.named_parameters():
+                    if name.startswith('weight'):
+                        torch.nn.init.orthogonal_(param)
+        
+        for layer in self.layers.values():
+            layer.apply(init_weights)
 
     def forward(self, x):
         x = self.layers['emb'](x) # (L N) -> (L N Hin)
